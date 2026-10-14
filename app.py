@@ -1,27 +1,32 @@
 
 # ============================================================
-# UNG DUNG DU BAO GIA CO PHIEU - LSTM + STREAMLIT
+# UNG DUNG DU BAO GIA CO PHIEU BANG LSTM
+# Streamlit + TensorFlow + Yahoo Finance
 # ============================================================
 
+import os
 import random
 from datetime import date, timedelta
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
+import tensorflow as tf
 
-from plotly.subplots import make_subplots
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 
-# -------------------- CAU HINH --------------------
+# ============================================================
+# 1. CAU HINH
+# ============================================================
 
 SEED = 42
 WINDOW_SIZE = 60
@@ -36,20 +41,21 @@ st.set_page_config(
     layout="wide"
 )
 
-# -------------------- GIAO DIEN --------------------
-
 st.title("📈 ỨNG DỤNG DỰ ĐOÁN GIÁ CỔ PHIẾU")
 st.markdown(
-    "Dự báo giá cổ phiếu bằng mô hình **LSTM (Deep Learning)** "
-    "từ dữ liệu lịch sử."
+    "Ứng dụng sử dụng mô hình **LSTM Deep Learning** "
+    "để phân tích giá đóng cửa lịch sử và dự báo các phiên tiếp theo."
 )
 
 st.info(
-    "Mô hình phục vụ mục đích học tập và nghiên cứu. "
-    "Kết quả dự báo không phải cam kết lợi nhuận hay khuyến nghị đầu tư."
+    "Ứng dụng phục vụ học tập và nghiên cứu. "
+    "Giá dự báo không phải giá chắc chắn sẽ xảy ra "
+    "và không phải khuyến nghị mua bán cổ phiếu."
 )
 
-# -------------------- TAI DU LIEU --------------------
+# ============================================================
+# 2. TAI DU LIEU CO PHIEU
+# ============================================================
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def download_stock_data(ticker, start_date, end_date):
@@ -62,20 +68,22 @@ def download_stock_data(ticker, start_date, end_date):
         threads=False
     )
 
-    if df.empty:
+    if df is None or df.empty:
         return pd.DataFrame()
 
-    # Xu ly du lieu MultiIndex tu cac phien ban yfinance
+    # Xu ly ca cot thong thuong va MultiIndex
     if isinstance(df.columns, pd.MultiIndex):
-        if "Close" in df.columns.get_level_values(0):
-            close = df.xs("Close", axis=1, level=0)
-            if isinstance(close, pd.DataFrame):
-                close = close.iloc[:, 0]
-        else:
+        if "Close" not in df.columns.get_level_values(0):
             return pd.DataFrame()
+
+        close = df.xs("Close", axis=1, level=0)
+
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
     else:
         if "Close" not in df.columns:
             return pd.DataFrame()
+
         close = df["Close"]
 
     result = pd.DataFrame({"Close": close})
@@ -85,24 +93,33 @@ def download_stock_data(ticker, start_date, end_date):
     result["Close"] = pd.to_numeric(
         result["Close"], errors="coerce"
     )
-    result = result.dropna()
 
-    return result
+    return result.dropna()
 
 
-# -------------------- TAO DU LIEU CHUOI --------------------
+# ============================================================
+# 3. TAO DU LIEU CHUOI 60 PHIEN
+# ============================================================
 
 def create_sequences(data, window_size=WINDOW_SIZE):
     X, y = [], []
 
     for i in range(window_size, len(data)):
-        X.append(data[i - window_size:i])
-        y.append(data[i])
+        X.append(data[i - window_size:i, 0])
+        y.append(data[i, 0])
 
-    return np.asarray(X), np.asarray(y)
+    X = np.asarray(X, dtype=np.float32)
+    y = np.asarray(y, dtype=np.float32)
+
+    # LSTM can du lieu 3 chieu: mau, thoi gian, dac trung
+    X = X.reshape(X.shape[0], X.shape[1], 1)
+
+    return X, y
 
 
-# -------------------- XAY DUNG MO HINH --------------------
+# ============================================================
+# 4. XAY DUNG MO HINH LSTM
+# ============================================================
 
 def build_model():
     model = Sequential([
@@ -121,8 +138,11 @@ def build_model():
     return model
 
 
-def predict_future(model, scaled_data, scaler, steps=10):
-    # Lay 60 phien gan nhat
+# ============================================================
+# 5. DU BAO NHIEU PHIEN TIEP THEO
+# ============================================================
+
+def predict_future(model, scaled_data, scaler, steps):
     current_window = scaled_data[-WINDOW_SIZE:].reshape(
         1, WINDOW_SIZE, 1
     )
@@ -137,23 +157,27 @@ def predict_future(model, scaled_data, scaler, steps=10):
         predictions.append(next_value)
 
         next_value_array = np.array(
-            next_value
-        ).reshape(1, 1, 1)
+            [[[next_value]]], dtype=np.float32
+        )
 
         current_window = np.concatenate(
             [current_window[:, 1:, :], next_value_array],
             axis=1
         )
 
-    predictions = np.array(predictions).reshape(-1, 1)
+    predictions = np.asarray(
+        predictions, dtype=np.float32
+    ).reshape(-1, 1)
 
     return scaler.inverse_transform(predictions).flatten()
 
 
-# -------------------- NHAP THONG TIN --------------------
+# ============================================================
+# 6. THANH CAI DAT
+# ============================================================
 
 with st.sidebar:
-    st.header("⚙️ Cài đặt dự báo")
+    st.header("⚙️ Cài đặt mô hình")
 
     ticker = st.text_input(
         "Mã cổ phiếu Yahoo Finance",
@@ -162,7 +186,7 @@ with st.sidebar:
     ).strip().upper()
 
     start_date = st.date_input(
-        "Ngày bắt đầu lấy dữ liệu",
+        "Ngày bắt đầu dữ liệu",
         value=date(2018, 1, 1),
         max_value=date.today()
     )
@@ -178,7 +202,7 @@ with st.sidebar:
         "Số epochs tối đa",
         min_value=5,
         max_value=50,
-        value=20,
+        value=15,
         step=5
     )
 
@@ -189,15 +213,18 @@ with st.sidebar:
     )
 
     st.caption(
-        "Mỗi lần chạy có thể cần vài phút tùy dữ liệu "
-        "và tài nguyên máy chủ."
+        "Lần chạy đầu có thể lâu hơn vì ứng dụng phải huấn luyện LSTM."
     )
 
-# -------------------- CHAY DU BAO --------------------
+
+# ============================================================
+# 7. CHAY UNG DUNG
+# ============================================================
 
 if run_button:
+
     if not ticker:
-        st.error("Vui lòng nhập mã cổ phiếu.")
+        st.error("Bạn chưa nhập mã cổ phiếu.")
         st.stop()
 
     if start_date >= date.today():
@@ -207,7 +234,11 @@ if run_button:
     end_date = date.today() + timedelta(days=1)
 
     try:
-        with st.spinner("Đang tải dữ liệu cổ phiếu..."):
+        # ----------------------------------------------------
+        # BUOC A: TAI DU LIEU
+        # ----------------------------------------------------
+
+        with st.spinner("Đang tải dữ liệu từ Yahoo Finance..."):
             df = download_stock_data(
                 ticker,
                 start_date.isoformat(),
@@ -216,8 +247,9 @@ if run_button:
 
         if df.empty:
             st.error(
-                "Không tải được dữ liệu. Hãy kiểm tra mã cổ phiếu "
-                "và thử lại, ví dụ VNM.VN hoặc FPT.VN."
+                "Không tải được dữ liệu cho mã "
+                f"{ticker}. Hãy kiểm tra mã cổ phiếu, "
+                "kết nối Internet hoặc thử mã VNM.VN."
             )
             st.stop()
 
@@ -225,36 +257,45 @@ if run_button:
 
         if len(data) < 150:
             st.error(
-                f"Chỉ có {len(data)} phiên dữ liệu. "
-                "Hãy chọn khoảng thời gian dài hơn để mô hình "
-                "có đủ dữ liệu huấn luyện và kiểm tra."
+                f"Dữ liệu chỉ có {len(data)} phiên. "
+                "Hãy chọn ngày bắt đầu sớm hơn để có ít nhất "
+                "150 phiên dữ liệu."
             )
             st.stop()
 
-        # Chia du lieu theo thu tu thoi gian
-        train_size = int(0.8 * len(data))
-        train_data = data[:train_size]
-        test_data = data[train_size:]
+        # ----------------------------------------------------
+        # BUOC B: CHIA TRAIN VA TEST THEO THOI GIAN
+        # ----------------------------------------------------
 
-        # Chi fit scaler tren tap train de tranh ro ri du lieu
+        train_size = int(len(data) * 0.8)
+
+        train_data = data[:train_size]
+
+        # Scaler chi hoc tren tap train
         scaler = MinMaxScaler()
         train_scaled = scaler.fit_transform(train_data)
-        test_scaled = scaler.transform(test_data)
+
+        # Chuyen toan bo du lieu sang cung thang do
+        all_scaled = scaler.transform(data)
 
         X_train, y_train = create_sequences(train_scaled)
 
+        # Tao test voi 60 phien lien truoc ngay dau test
         test_combined = np.vstack([
             train_scaled[-WINDOW_SIZE:],
-            test_scaled
+            all_scaled[train_size:]
         ])
 
         X_test, y_test = create_sequences(test_combined)
 
-        # Chia validation tu cuoi tap train
-        val_size = max(1, int(0.1 * len(X_train)))
+        # ----------------------------------------------------
+        # BUOC C: CHIA VALIDATION
+        # ----------------------------------------------------
+
+        val_size = max(1, int(len(X_train) * 0.1))
 
         if len(X_train) <= val_size:
-            st.error("Không đủ dữ liệu để chia tập huấn luyện.")
+            st.error("Không đủ dữ liệu để chia tập validation.")
             st.stop()
 
         X_train_final = X_train[:-val_size]
@@ -263,10 +304,12 @@ if run_button:
         X_val = X_train[-val_size:]
         y_val = y_train[-val_size:]
 
+        # ----------------------------------------------------
+        # BUOC D: HUAN LUYEN LSTM
+        # ----------------------------------------------------
+
         tf.keras.backend.clear_session()
-        tf.random.set_seed(SEED)
-        np.random.seed(SEED)
-        random.seed(SEED)
+        tf.keras.utils.set_random_seed(SEED)
 
         model = build_model()
 
@@ -276,6 +319,18 @@ if run_button:
             restore_best_weights=True
         )
 
+        progress = st.progress(0)
+        status = st.empty()
+
+        class StreamlitProgress(tf.keras.callbacks.Callback):
+            def on_epoch_end(self, epoch, logs=None):
+                progress.progress(
+                    min((epoch + 1) / epochs, 1.0)
+                )
+                status.text(
+                    f"Đang huấn luyện: epoch {epoch + 1}/{epochs}"
+                )
+
         with st.spinner("Đang huấn luyện mô hình LSTM..."):
             history = model.fit(
                 X_train_final,
@@ -284,49 +339,77 @@ if run_button:
                 epochs=epochs,
                 batch_size=32,
                 shuffle=False,
-                callbacks=[early_stop],
+                callbacks=[early_stop, StreamlitProgress()],
                 verbose=0
             )
 
-        with st.spinner("Đang tính toán kết quả dự báo..."):
+        progress.empty()
+        status.empty()
+
+        # ----------------------------------------------------
+        # BUOC E: DANH GIA TREN TAP TEST
+        # ----------------------------------------------------
+
+        with st.spinner("Đang đánh giá và tạo dự báo..."):
             test_pred_scaled = model.predict(
                 X_test, verbose=0
             )
 
             test_pred = scaler.inverse_transform(
-                test_pred_scaled
+                test_pred_scaled.reshape(-1, 1)
             ).flatten()
 
             y_test_real = scaler.inverse_transform(
                 y_test.reshape(-1, 1)
             ).flatten()
 
-            rmse = np.sqrt(
+            rmse = float(np.sqrt(
                 mean_squared_error(y_test_real, test_pred)
+            ))
+
+            mae = float(
+                mean_absolute_error(y_test_real, test_pred)
             )
-            mae = mean_absolute_error(y_test_real, test_pred)
 
-            if len(y_test_real) > 1:
-                r2 = r2_score(y_test_real, test_pred)
-            else:
-                r2 = float("nan")
+            r2 = float(
+                r2_score(y_test_real, test_pred)
+            )
 
-            # Huan luyen tren tap train va du bao tu 60 phien cuoi
-            all_scaled = np.vstack([train_scaled, test_scaled])
+            # Huan luyen lai tren toan bo du lieu de du bao tuong lai.
+            # Dung so epoch da hoc tot nhat o mo hinh validation.
+            best_epoch = len(history.history["loss"])
+
+            future_X, future_y = create_sequences(all_scaled)
+
+            tf.keras.backend.clear_session()
+            tf.keras.utils.set_random_seed(SEED)
+
+            future_model = build_model()
+
+            future_model.fit(
+                future_X,
+                future_y,
+                epochs=max(1, best_epoch),
+                batch_size=32,
+                shuffle=False,
+                verbose=0
+            )
 
             future_predictions = predict_future(
-                model,
+                future_model,
                 all_scaled,
                 scaler,
-                steps=forecast_days
+                forecast_days
             )
 
-        # -------------------- KET QUA --------------------
+        # ====================================================
+        # 8. HIEN THI CAC CHI SO
+        # ====================================================
 
-        st.success(f"Đã chạy mô hình cho mã {ticker}")
+        st.success(f"Đã chạy mô hình thành công cho {ticker}.")
 
         last_close = float(data[-1, 0])
-        last_date = pd.Timestamp(df.index[-1]).strftime("%d/%m/%Y")
+        last_date = pd.Timestamp(df.index[-1])
 
         col1, col2, col3, col4 = st.columns(4)
 
@@ -334,30 +417,34 @@ if run_button:
             "Giá đóng cửa gần nhất",
             f"{last_close:,.2f}"
         )
+
         col2.metric("RMSE", f"{rmse:,.3f}")
         col3.metric("MAE", f"{mae:,.3f}")
-        col4.metric("R²", f"{r2:.4f}" if np.isfinite(r2) else "N/A")
+        col4.metric("R²", f"{r2:.4f}")
 
         st.caption(
-            f"Dữ liệu gần nhất: {last_date} | "
-            f"Tổng số phiên: {len(data):,} | "
-            f"Train: {len(train_data):,} | "
-            f"Test: {len(test_data):,}"
+            f"Ngày dữ liệu cuối: {last_date:%d/%m/%Y} | "
+            f"Số phiên dữ liệu: {len(data)} | "
+            f"Epoch tốt nhất: {best_epoch}"
         )
 
-        # -------------------- BIEU DO 1: LOSS --------------------
+        # ====================================================
+        # 9. BIEU DO LOSS
+        # ====================================================
 
         st.subheader("1. Loss Train và Validation")
 
         loss_fig = go.Figure()
 
         loss_fig.add_trace(go.Scatter(
+            x=list(range(1, len(history.history["loss"]) + 1)),
             y=history.history["loss"],
             mode="lines+markers",
             name="Train Loss"
         ))
 
         loss_fig.add_trace(go.Scatter(
+            x=list(range(1, len(history.history["val_loss"]) + 1)),
             y=history.history["val_loss"],
             mode="lines+markers",
             name="Validation Loss"
@@ -367,21 +454,23 @@ if run_button:
             title="Loss Train vs Validation",
             xaxis_title="Epoch",
             yaxis_title="Mean Squared Error",
-            hovermode="x unified",
             template="plotly_white",
+            hovermode="x unified",
             height=420
         )
 
-        st.plotly_chart(loss_fig, use_container_width=True)
+        st.plotly_chart(
+            loss_fig,
+            use_container_width=True
+        )
 
-        # -------------------- BIEU DO 2: TEST --------------------
+        # ====================================================
+        # 10. BIEU DO GIA THUC TE VA DU BAO TEST
+        # ====================================================
 
         st.subheader("2. Giá thực tế so với giá dự báo trên tập Test")
 
         test_dates = df.index[train_size:]
-
-        # So khop ngay voi ket qua test
-        test_dates = test_dates[-len(y_test_real):]
 
         test_fig = go.Figure()
 
@@ -400,36 +489,35 @@ if run_button:
         ))
 
         test_fig.update_layout(
-            title=f"So sánh giá thực tế và dự báo - {ticker}",
+            title=f"Giá thực tế và dự báo - {ticker}",
             xaxis_title="Ngày",
             yaxis_title="Giá đóng cửa",
-            hovermode="x unified",
             template="plotly_white",
+            hovermode="x unified",
             height=500
         )
 
-        st.plotly_chart(test_fig, use_container_width=True)
-
-        # -------------------- BIEU DO 3: DU BAO TUONG LAI --------------------
-
-        st.subheader(
-            f"3. Dự báo {forecast_days} phiên giao dịch tiếp theo"
+        st.plotly_chart(
+            test_fig,
+            use_container_width=True
         )
 
-        # Ngay lam viec tham khao; khong tinh lich nghi le
+        # ====================================================
+        # 11. BIEU DO DU BAO TUONG LAI
+        # ====================================================
+
+        st.subheader(
+            f"3. Dự báo {forecast_days} phiên tiếp theo"
+        )
+
+        # Ngay lam viec tham khao, chua loai ngay nghi le
         future_dates = pd.bdate_range(
-            start=df.index[-1] + pd.Timedelta(days=1),
+            start=last_date + pd.Timedelta(days=1),
             periods=forecast_days
         )
 
-        future_df = pd.DataFrame({
-            "Ngày dự báo": future_dates,
-            "Giá dự báo": future_predictions
-        })
-
         future_fig = go.Figure()
 
-        # Hien thi mot doan gia lich su gan nhat
         history_count = min(100, len(df))
 
         future_fig.add_trace(go.Scatter(
@@ -439,40 +527,44 @@ if run_button:
             name="Giá lịch sử"
         ))
 
-        # Noi duong du bao voi gia dong cua gan nhat
-        forecast_x = [df.index[-1]] + list(future_dates)
-        forecast_y = [last_close] + list(future_predictions)
-
         future_fig.add_trace(go.Scatter(
-            x=forecast_x,
-            y=forecast_y,
+            x=[last_date] + list(future_dates),
+            y=[last_close] + list(future_predictions),
             mode="lines+markers",
-            name="Giá dự báo tương lai",
+            name="Giá dự báo",
             line=dict(dash="dash")
         ))
 
         future_fig.add_vline(
-            x=df.index[-1],
+            x=last_date,
             line_dash="dot",
             annotation_text="Bắt đầu dự báo"
         )
 
         future_fig.update_layout(
-            title=f"Dự báo giá {ticker}",
+            title=f"Dự báo giá tương lai - {ticker}",
             xaxis_title="Ngày",
             yaxis_title="Giá đóng cửa",
-            hovermode="x unified",
             template="plotly_white",
+            hovermode="x unified",
             height=500
         )
 
-        st.plotly_chart(future_fig, use_container_width=True)
+        st.plotly_chart(
+            future_fig,
+            use_container_width=True
+        )
 
-        # -------------------- BANG DU BAO --------------------
+        # ====================================================
+        # 12. BANG DU BAO
+        # ====================================================
 
         st.subheader("Bảng giá dự báo")
 
-        future_df["Giá dự báo"] = future_df["Giá dự báo"].round(2)
+        future_df = pd.DataFrame({
+            "Ngày dự báo": future_dates.strftime("%d/%m/%Y"),
+            "Giá dự báo": np.round(future_predictions, 2)
+        })
 
         st.dataframe(
             future_df,
@@ -480,51 +572,47 @@ if run_button:
             hide_index=True
         )
 
-        csv_data = future_df.to_csv(
-            index=False
-        ).encode("utf-8-sig")
-
         st.download_button(
-            "📥 Tải bảng dự báo CSV",
-            data=csv_data,
+            label="📥 Tải bảng dự báo CSV",
+            data=future_df.to_csv(
+                index=False
+            ).encode("utf-8-sig"),
             file_name=f"du_bao_{ticker.replace('.', '_')}.csv",
             mime="text/csv"
         )
 
-        # -------------------- LICH SU GIA --------------------
-
-        with st.expander("Xem dữ liệu giá lịch sử"):
+        with st.expander("Xem 100 phiên dữ liệu gần nhất"):
             st.dataframe(
                 df.tail(100).sort_index(ascending=False),
                 use_container_width=True
             )
 
-        st.caption(
-            "Lưu ý: R² có thể âm nếu mô hình dự báo kém hơn "
-            "mốc dự báo bằng giá trung bình. Giá dự báo nhiều bước "
-            "được tạo nối tiếp từ chính các dự báo trước đó nên "
-            "sai số có thể tích lũy. Ngày làm việc hiển thị chưa "
-            "loại trừ các ngày nghỉ lễ của thị trường chứng khoán Việt Nam."
+        st.warning(
+            "Mô hình dự báo nhiều phiên theo cách nối tiếp, "
+            "vì vậy sai số có thể tăng theo thời gian. "
+            "Ngày dự báo chưa loại trừ ngày nghỉ lễ của thị trường."
         )
 
     except Exception as e:
         st.error(
-            "Có lỗi khi tải dữ liệu hoặc chạy mô hình. "
-            "Hãy thử lại hoặc kiểm tra log của ứng dụng."
+            "Ứng dụng gặp lỗi khi tải dữ liệu hoặc chạy mô hình. "
+            "Thông tin kỹ thuật:"
         )
         st.exception(e)
 
 else:
-    st.markdown("### Hướng dẫn sử dụng")
-    st.write(
-        "1. Nhập mã cổ phiếu ở thanh bên trái.\n"
-        "2. Chọn ngày bắt đầu lấy dữ liệu.\n"
-        "3. Chọn số phiên muốn dự báo và số epochs tối đa.\n"
-        "4. Nhấn **Chạy mô hình dự báo** và đợi kết quả."
+    st.subheader("Hướng dẫn sử dụng")
+
+    st.markdown(
+        """
+        1. Nhập mã cổ phiếu, ví dụ `VNM.VN`, `FPT.VN`, `HPG.VN`.
+        2. Chọn ngày bắt đầu lấy dữ liệu.
+        3. Chọn số phiên muốn dự báo.
+        4. Nhấn **Chạy mô hình dự báo**.
+        5. Chờ quá trình tải dữ liệu và huấn luyện LSTM hoàn tất.
+        """
     )
 
-    st.warning(
-        "Ứng dụng chỉ chạy mô hình sau khi bạn nhấn nút. "
-        "Dự báo là kết quả mô hình học máy, không phải giá chắc chắn "
-        "sẽ xảy ra trên thị trường."
+    st.caption(
+        "Ứng dụng cần kết nối Internet để lấy dữ liệu từ Yahoo Finance."
     )
