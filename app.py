@@ -185,10 +185,29 @@ with st.sidebar:
         help="Ví dụ: VNM.VN, FPT.VN, HPG.VN, VCB.VN"
     ).strip().upper()
 
+    if ticker and "." not in ticker:
+        ticker = ticker + ".VN"
+        
     start_date = st.date_input(
         "Ngày bắt đầu dữ liệu",
         value=date(2018, 1, 1),
-        max_value=date.today()
+        max_value=date.today(),
+        key="start_date"
+    )
+
+     start_date = st.date_input(
+        "Ngày bắt đầu dữ liệu",
+        value=date(2018, 1, 1),
+        max_value=date.today(),
+        key="start_date"
+    )
+
+    end_date = st.date_input(
+        "Ngày kết thúc dữ liệu",
+        value=date.today(),
+        min_value=start_date,
+        max_value=date.today(),
+        key="end_date"
     )
 
     forecast_days = st.slider(
@@ -227,11 +246,12 @@ if run_button:
         st.error("Bạn chưa nhập mã cổ phiếu.")
         st.stop()
 
-    if start_date >= date.today():
-        st.error("Ngày bắt đầu phải trước ngày hiện tại.")
-        st.stop()
+    if start_date >= end_date:
+    st.error("Ngày kết thúc phải sau ngày bắt đầu.")
+    st.stop()
 
-    end_date = date.today() + timedelta(days=1)
+# Yahoo Finance khong bao gom ngay end trong ket qua
+download_end_date = end_date + timedelta(days=1)
 
     try:
         # ----------------------------------------------------
@@ -242,7 +262,7 @@ if run_button:
             df = download_stock_data(
                 ticker,
                 start_date.isoformat(),
-                end_date.isoformat()
+                 download_end_date.isoformat()
             )
 
         if df.empty:
@@ -535,11 +555,100 @@ if run_button:
             line=dict(dash="dash")
         ))
 
-        future_fig.add_vline(
-            x=last_date,
-            line_dash="dot",
-            annotation_text="Bắt đầu dự báo"
+        
+future_fig.add_shape(
+    type="line",
+    x0=last_date,
+    x1=last_date,
+    y0=0,
+    y1=1,
+    xref="x",
+    yref="paper",
+    line=dict(
+        color="gray",
+        dash="dot",
+        width=2
+    )
+)
+
+future_fig.add_annotation(
+    x=last_date,
+    y=1,
+    xref="x",
+    yref="paper",
+    text="Bắt đầu dự báo",
+    showarrow=False,
+    yshift=12
+)
+```
+
+Cách này vẽ đường thẳng đứng trực tiếp trên trục ngày tháng, tránh lỗi phép cộng/trừ `Timestamp` ở `add_vline()`.
+
+## 4. Sửa phần tải dữ liệu để biết chính xác nguyên nhân
+
+Tìm hàm `download_stock_data()` ở đầu file và thay toàn bộ hàm bằng đoạn sau. Đoạn này thử tải dữ liệu lại tối đa 3 lần nếu xảy ra lỗi, đồng thời xử lý tên cột `Close` và cấu trúc dữ liệu khác nhau của Yahoo Finance.
+
+<CodeBlock language="python" editable>
+@st.cache_data(ttl=900, show_spinner=False)
+def download_stock_data(ticker, start_date, end_date):
+    import time
+
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            df = yf.download(
+                ticker,
+                start=start_date,
+                end=end_date,
+                auto_adjust=True,
+                progress=False,
+                threads=False
+            )
+
+            if df is not None and not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    if "Close" not in df.columns.get_level_values(0):
+                        return pd.DataFrame()
+
+                    close = df.xs(
+                        "Close", axis=1, level=0
+                    )
+
+                    if isinstance(close, pd.DataFrame):
+                        close = close.iloc[:, 0]
+                else:
+                    if "Close" not in df.columns:
+                        return pd.DataFrame()
+
+                    close = df["Close"]
+
+                result = pd.DataFrame({"Close": close})
+                result.index = pd.to_datetime(result.index)
+                result = result.sort_index()
+                result = result[
+                    ~result.index.duplicated(keep="last")
+                ]
+                result["Close"] = pd.to_numeric(
+                    result["Close"], errors="coerce"
+                )
+                result = result.dropna()
+
+                if not result.empty:
+                    return result
+
+        except Exception as e:
+            last_error = str(e)
+
+        if attempt < 2:
+            time.sleep(2)
+
+    if last_error:
+        raise RuntimeError(
+            f"Yahoo Finance không tải được {ticker}: {last_error}"
         )
+
+    return pd.DataFrame()
 
         future_fig.update_layout(
             title=f"Dự báo giá tương lai - {ticker}",
