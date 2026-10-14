@@ -195,7 +195,7 @@ with st.sidebar:
         key="start_date"
     )
 
-     start_date = st.date_input(
+    start_date = st.date_input(
         "Ngày bắt đầu dữ liệu",
         value=date(2018, 1, 1),
         max_value=date.today(),
